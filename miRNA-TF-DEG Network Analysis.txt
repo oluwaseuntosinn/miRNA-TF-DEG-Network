@@ -1,0 +1,99 @@
+# miRNA-TF-DEG Network Analysis
+# Author: Your Name
+# Date: August 2025
+# Description: This script builds a validated miRNA-target interaction network for a list of DEGs,
+#              filters high-confidence interactions, visualizes the network, and identifies TF-miRNA regulatory crosstalk.
+
+# Load necessary libraries
+library(multiMiR)   # For miRNA-target interactions
+library(dplyr)      # For data manipulation
+library(igraph)     # For graph generation and visualization
+
+# Optional: Set working directory to project root (user should edit this)
+# setwd("path/to/your/project")
+
+# Step 1: Define list of DEGs (Differentially Expressed Genes)
+DEG_genes <- c("CCL5", "CD244", "CD27", "CTLA4", "CXCR6", "FASLG", 
+               "GZMB", "IL2RB", "KLRD1", "LCK", "NCR3", "PRF1", 
+               "TBX21", "ZAP70")
+
+# Step 2: Retrieve validated miRNA-target interactions
+miRNA_results <- get_multimir(target = DEG_genes, table = "validated", summary = TRUE)
+
+# Step 3: Extract and clean the summary data
+miRNA_summary <- miRNA_results@summary
+miRNA_summary[is.na(miRNA_summary)] <- 0  # Replace all NA values with 0
+
+# Step 4: Compute interaction score
+miRNA_summary$interaction_score <- with(miRNA_summary,
+                                        mirtarbase + tarbase + validated.sum)
+
+# Save raw results
+write.csv(miRNA_summary, "output/miRNA_summary.csv", row.names = FALSE)
+
+# Step 5: Interaction score distribution and thresholding
+interaction_counts <- table(miRNA_summary$interaction_score)
+print(interaction_counts)
+
+threshold <- 4  # Adjust as needed
+miRNA_filtered <- miRNA_summary %>%
+  filter(interaction_score >= threshold)
+
+# Step 6: Prepare nodes (miRNAs and DEGs)
+all_nodes <- unique(c(miRNA_filtered$mature_mirna_id, miRNA_filtered$target_symbol))
+nodes <- data.frame(
+  id = all_nodes,
+  type = ifelse(all_nodes %in% miRNA_filtered$mature_mirna_id, "miRNA", "DEG")
+)
+
+# Step 7: Prepare edges
+miRNA_target_network_data <- miRNA_filtered %>%
+  select(mature_mirna_id, target_symbol, interaction_score) %>%
+  arrange(desc(interaction_score), mature_mirna_id) %>%
+  mutate(miRNA_rank = rank(-interaction_score, ties.method = "first"))
+
+# Step 8: Build and annotate the graph
+miRNA_target_graph <- graph_from_data_frame(miRNA_target_network_data, directed = TRUE)
+V(miRNA_target_graph)$type <- nodes$type[match(V(miRNA_target_graph)$name, nodes$id)]
+V(miRNA_target_graph)$label <- V(miRNA_target_graph)$name
+
+# Step 9: Visualize the network
+dev.off()  # Clear current plot
+dev.new()  # Open new plot window
+
+par(mar = c(5, 5, 4, 2) + 0.1)
+plot(miRNA_target_graph,
+     vertex.size = 5,
+     vertex.label.cex = 0.7,
+     vertex.label.color = "black",
+     edge.arrow.size = 0.5,
+     vertex.color = ifelse(V(miRNA_target_graph)$type == "miRNA", "skyblue", "orange"),
+     vertex.label.family = "sans",
+     vertex.label.dist = 1.5,
+     main = paste("miRNA-Target Network\nThreshold:", threshold))
+
+# Step 10: Export outputs
+dir.create("output", showWarnings = FALSE)
+write.csv(miRNA_target_network_data, "output/miRNA_target_network_filtered.csv", row.names = FALSE)
+write_graph(miRNA_target_graph, file = "output/miRNA_target_network.graphml", format = "graphml")
+
+# Step 11: Print network stats
+cat("Number of nodes:", vcount(miRNA_target_graph), "\n")
+cat("Number of edges:", ecount(miRNA_target_graph), "\n")
+
+# Step 12: TF-miRNA Crosstalk
+
+# Load TF and miRNA target lists (ensure these are placed in /data folder)
+mirna_targets <- read.csv("data/miRNA_target_for_TF_miRNA.csv")
+tf_targets <- read.csv("data/tf_targets_for_TF_miRNA.csv")
+
+# Merge to identify shared targets
+tf_mirna <- merge(tf_targets, mirna_targets, by = "Target") %>%
+  select(TF, miRNA) %>%
+  distinct()
+
+# View and export TF-miRNA edges
+print(tf_mirna)
+write.csv(tf_mirna, "output/tf_mirna.csv", row.names = FALSE)
+
+# End of Script
